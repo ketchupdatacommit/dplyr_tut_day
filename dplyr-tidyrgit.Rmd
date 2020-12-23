@@ -1,0 +1,580 @@
+---
+title: "Data wrangling with dplyr and tidyr"
+output:
+  html_document:
+    theme: spacelab
+    toc: yes
+    toc_float: yes
+  pdf_document:
+    toc: yes
+---
+
+
+### Getting Started 
+```{r, eval=T,echo=T,warning=FALSE, message=F, results='hide'}
+
+## Install packages if needed
+# install.packages('devtools')
+# install.packages('readr')
+# install.packages('dplyr')
+# install.packages('tidyr')
+# install.packages('stringr')
+# install.packages('ggplot2')
+
+# Load packages
+library(devtools)
+library(tidyverse)
+library(forcats)
+library(broom)
+library(stringr)
+
+# Check package versions after Packages pane -> Update
+devtools::session_info()
+```
+
+
+```{r, eval=T,echo=T,results='hide'}
+## Comparing read.csv with read_csv
+# Read in FAO data
+fao   <- read.csv(file = 'data/FAO_1950to2012_111914.csv', stringsAsFactors = F) 
+summary(fao)
+head(fao)
+# vs using read_csv
+fao   <- read_csv(file = 'data/FAO_1950to2012_111914.csv') 
+fao
+# note: read_csv like read.csv(...)
+#       also keeps original column names and converts to tbl_df()
+names(fao) = make.names(names(fao), unique=T) # since original column names have duplicates
+
+## Consider what happens with the following command
+# fao # all entries are printed in your console
+head(fao) # top five entries are printed in your console, columns wrap and can be difficult to follow if working with many variables
+summary(fao)
+
+## With dplyr
+fao<-tbl_df(fao) # convert to table data
+fao # now top 10 rows are shown along with data type of each variable. Variables that do not fit in console window are shown below.
+glimpse(fao) # view all columns 
+summary(fao)
+if (interactive()) View(fao) # interactive==T if in Console, not knitting
+```
+
+#### Gather and Spread
+```{r, eval=T,echo=T,results='hide'}
+# Let's convert the fao data from it's current wide format to a long format using gather(). Note the use of helper fnc
+d <- gather(fao, key='Year', value='Catch', num_range('X',1950:2012)) # ?select for num_range()
+
+# We can convert back to wide format with the spread function by calling the previously created variables
+spread(d,Year, Catch)
+
+if (interactive()) View(d) # interactive==T if in Console, not knitting
+# to handle: '-','...',' F','X'
+```
+
+
+#### Rename
+```{r, eval=T,echo=T,results='hide'}
+# Note the use of backticks around column names with special characters like "("
+d <- dplyr::rename(d,
+          country     = Country..Country.,
+          commname    = Species..ASFIS.species.,
+          sciname     = Species..ASFIS.species._2,
+          spcode      = Species..ASFIS.species._1,
+          spgroup     = Species..ISSCAAP.group.,
+          spgroupname = Species..ISSCAAP.group._1,
+          regionfao   = Fishing.area..FAO.major.fishing.area.,
+          unit        = Measure..Measure.,
+          year        = Year,catch=Catch)
+
+```
+
+
+#### Select
+```{r, eval=T, echo=T,results='hide'}
+# we could chose all the columns to keep
+select(d,country, commname, sciname, spcode, spgroupname, regionfao, year, catch)
+
+# but it's easier to just specify the columns to get rid of
+d<-select(d,-spgroup,-unit)
+```
+
+
+```{r,eval=T,echo=T,results='hide'}
+# select all coloumns that begin with the letter s
+select(d, starts_with('s'))
+
+# select columns that match a regular expression
+select(d, matches('*name'))
+
+# select columns between two columns by referencing their position like normal [,x:y] syntax 
+select(d, country, spcode:year)
+
+# select every column (though I haven't found a situation where this is useful yet...)
+select(d,everything())
+```
+
+
+#### Arrange
+```{r, eval=T,echo=T,results='hide'}
+# arrange by country, sciname, regionfao, and year
+d<-arrange(d,country,sciname,regionfao,year)
+
+# if we'd like the years to be descending
+arrange(d, country, desc(sciname), regionfao, desc(year))
+
+# if we want to first order by species
+arrange(d, sciname, country, regionfao, year)
+
+```
+
+
+#### Mutate  
+```{r, eval=T,echo=T, warning=F,results='hide'}
+d <- mutate(d,
+            year      = as.numeric(str_replace(year, 'X', '')), # strip X off all year values and convert to numeric
+            catch     = as.numeric(str_replace(catch, c(' F','...','-'), replacement = '')),
+            logcatch  = log10(catch)) # create a  new variable of log catch
+```
+
+
+#### Filter  
+```{r, eval=T, echo=T,results='hide'}
+# remove the "Totals" values and any years with NA catch values
+d<-filter(d,!(country %in% c('Totals - Quantity (number)','Totals - Quantity (tonnes)')) & !is.na(catch))
+
+# print data
+d
+```
+
+
+### Piping and chaining code
+```{r,eval=T,echo=T,results='hide'}
+d <- fao %>%
+  gather(key='Year',value = 'Catch',num_range('X',1950:2012)) %>% # convert to long format
+  rename(
+    country     = Country..Country., # rename columns
+    #country     = `Country (Country)`, # backtick trick!
+    commname    = Species..ASFIS.species.,
+    spcode      = Species..ASFIS.species._1,
+    sciname     = Species..ASFIS.species._2,
+    spgroup     = Species..ISSCAAP.group.,
+    spgroupname = Species..ISSCAAP.group._1,
+    regionfao   = Fishing.area..FAO.major.fishing.area.,
+    unit        = Measure..Measure.,
+    year        = Year,
+    catch       = Catch) %>%
+  select(-spgroup,-unit) %>% # drop spgroup, regionfaoname, and unit variables
+  arrange(country,sciname,regionfao,year) %>% # order by country, sciname, regionfao, and year
+  mutate(
+    year        = as.numeric(str_replace(year, 'X', '')), # strip X off all year values and convert to numeric
+    catch       = as.numeric(gsub(catch, pattern=c(' F'), replacement = '', fixed = T)),
+    logcatch    = log10(catch)) %>% # create a  new variable of log catch 
+  filter(!country %in% c('Totals - Quantity (number)','Totals - Quantity (tonnes)') & !is.na(catch)) # remove 'Totals' rows - rows: 1,114,596 -> 310,619
+
+# print data frame
+d
+```
+
+```{r,eval=T,echo=T,results='hide'}
+d %>%
+  complete(year = 1950:2012)
+
+d %>%
+  group_by(country,sciname,commname,regionfao,spgroupname,spcode) %>%
+  complete(year = 1950:2012) %>%
+  ungroup()
+```
+
+
+#### Separate and Unite  
+```{r, eval=T,echo=T}
+# create new variables for each taxonomic component 
+d<-separate(d,spcode, into = c('maintaxa','order','family','genus','species'), sep = c(2,4,6,9))
+
+# recombine the columns with unite 
+d<-unite(d, col = spcode, maintaxa:species, sep = '') # Note - we can use helper functions here if needed
+```
+
+
+```{r,eval=T,echo=T,tidy = T, results='hide'}
+# read in life history data
+load(file = 'data/mpack.Rdata')
+lh<-mpack$lh
+rm(mpack)
+
+lh<-lh %>%
+  tbl_df() %>%
+  dplyr::rename(sciname=sname) %>% # rename to sciname for joining
+  select(sciname,vbk,temp,maxl,agem) %>% # select variables we wish to add
+  slice(match(unique(lh$sname),lh$sname))
+
+# first let's pull out all species US fisheries
+us<- d %>%
+  ungroup() %>%
+  filter(country=='United States of America' & year==2012) %>%
+  select(country, sciname, commname, spgroupname) %>%
+  distinct()
+  
+# left join to retain all data in our d data frame. 
+us %>% 
+  left_join(lh, by = 'sciname') # we only need to specify the right hand data set to join lh with since we've piped
+
+# right join to keep all lh data.  
+us %>%
+  right_join(lh, by = 'sciname')
+
+# inner join to only keep data for which we have matches in both data sets
+us %>%
+  inner_join(lh, by = 'sciname')
+
+# full join to keep all data for both data sets
+us %>%
+  full_join(lh, by = 'sciname')
+```
+
+
+## Analyzing and Manipulating Data
+```{r,eval=T,echo=T,results='hide'}
+# Canada's fisheries from largest to smallest in 2012
+d %>%
+  filter(country=='Canada' & year==2012) %>%
+  select(year,country,commname,catch) %>%
+  arrange(desc(catch))
+
+# All fisheries in the Northwest Atlantic with a catch over 1000 MT
+d %>%
+  filter(regionfao==21 & year==2012 & catch>=1000) %>%
+  select(country,commname,regionfao,catch) %>%
+  arrange(desc(catch))
+
+# Which countries have the 10 largest shark fisheries?
+d %>%
+  filter(spgroupname=='Sharks, rays, chimaeras' & year==2012) %>%
+  select(country,commname,catch) %>%
+  arrange(desc(catch)) %>%
+  slice(1:10)
+```
+
+
+### Grouping, Summarizing, and Mutating Data
+```{r,eval=T,echo=T,results='hide'}
+# Total global harvest
+global <- d %>%
+  ungroup() %>%
+  group_by(year) %>%
+  dplyr::summarize(totalcatch=sum(catch,na.rm=T)) %>%
+  ggplot(aes(x=year,y=totalcatch)) +
+  geom_line()
+
+# Global harvest by country
+cntry<-d %>%
+  group_by(year,country) %>%
+  dplyr::summarize(totalcatch=sum(catch, na.rm=T)) %>%
+  ungroup() %>% # -- Here's an example of why you need to ungroup! --
+  dplyr::arrange(country)
+
+# Global harvest by species category
+spcatch <- d %>%
+  group_by(year,spgroupname) %>%
+  dplyr::summarize(totalcatch=sum(catch, na.rm=T)) %>%
+  ungroup() %>% 
+  arrange(spgroupname)
+
+# USA harvest by species category over time
+usa<- d %>%
+  filter(country=='United States of America') %>%
+  group_by(year,country,spgroupname) %>%
+  dplyr::summarize(totalcatch=sum(catch,na.rm=T)) %>%
+  ungroup() %>%
+  arrange(spgroupname)
+```
+
+
+calculating some additional information for our datasets  
+```{r, eval=T,echo=T,results='hide'}
+# Calculate what % of global catch each country contributes in each year and for rank each year by that %
+cntry %>%
+  group_by(year) %>%
+  mutate(
+    globalcatch = sum(totalcatch,na.rm=T),
+    globalrank  = dense_rank(totalcatch)) %>% # global catch and cntry rank
+  group_by(year,country) %>% # now we group by a different level before our next calculation
+  mutate(
+    percglobal = 100*(totalcatch/globalcatch)) %>%
+  group_by(country) %>%
+  mutate(
+    ingrouprank = dense_rank(totalcatch))
+```  
+
+### Using Dplyr with `broom` and `ggplot2` for data viz
+```{r, eval=T, echo=T}
+
+# Prep our data
+dat <- d %>%
+  ungroup() %>% #Often a good idea to ungroup before starting something new
+  mutate(id = paste(country,spcode,regionfao, sep = '_')) %>% #Generate a unique ID for each fishery
+  group_by(id) %>%
+  mutate(mean_log_catch = mean(logcatch, na.rm = T), cv_log_catch = sd(logcatch, na.rm = T)/mean(logcatch, na.rm = T), length_catch = sum(is.na(logcatch) == F & logcatch >0)) %>% # we want to keep some of the other data as well
+  filter(year == max(year) & length_catch > 10 & is.finite(mean_log_catch) == T & cv_log_catch >0) %>% # We don't want repeated entries, so let's just grab one random year
+  dplyr::select(-year, -catch, -logcatch)
+
+# Always plot!
+ggplot(dat, aes(mean_log_catch,cv_log_catch)) + 
+  geom_point()
+
+```
+
+
+```{r, eval=T, echo=T}
+
+regdat <-  dat %>%
+  ungroup() %>% #we want global statistics now
+  mutate(scaled_ml_catch = mean_log_catch/max(mean_log_catch), scaled_cv_catch =  (cv_log_catch/min(cv_log_catch))^-1, fishiness = scaled_ml_catch + scaled_cv_catch) %>%
+  left_join(lh, by = 'sciname')
+
+regplot <- regdat %>% #great thing about ggplot is the ability to save as an object and use and modify later
+  ggplot(aes(mean_log_catch,cv_log_catch, fill = fishiness)) + 
+  geom_point(shape = 21) + 
+  scale_fill_gradient(low = 'red',high = 'green')
+
+regplot # grea
+
+```
+
+
+
+```{r, eval=T, echo=T, results='hide'}
+
+reg_vars <- c('regionfao', 'spgroupname', 'vbk','maxl','temp') #specify variables you want
+
+class(regdat$regionfao) #whoops, it things FAO region is an integer, we want a factor
+
+filtered_dat <- regdat %>%
+  ungroup() %>%
+  mutate(has_all = apply(is.na(regdat[,reg_vars]) == F, 1,all)) %>%
+  filter(has_all == T) %>%
+  mutate(regionfao = as.factor(regionfao),spgroupname = as.factor(spgroupname))
+
+reg_fmla <- as.formula(paste('fishiness ~',paste(reg_vars, collapse = '+'), sep = '')) #create regression formula
+
+fish_model <- lm(reg_fmla, data = filtered_dat) #run a linear regression
+summary(fish_model)
+
+```
+
+
+
+```{r, eval=T, echo=T, results='hide'}
+library(broom)
+reg_summary <- glance(fish_model)
+
+reg_summary
+```
+
+
+
+```{r, eval=T, echo = T}
+
+tidy_model <- tidy(fish_model)
+
+tidy_model$variable<- as.factor(tidy_model$term) #convert terms to factors
+
+tidy_model$variable <- reorder(tidy_model$variable, tidy_model$p.value) #sort variables by pvalue
+
+tidy_model$short_pval<- pmin(tidy_model$p.value,0.2) #create abbreviated version
+
+regression_plot <- (ggplot(data=tidy_model,aes(x=variable,y=estimate,fill=short_pval))+
+                      geom_bar(position='dodge',stat='identity',color='black')+
+                      scale_fill_gradient2(high='black',mid='gray99',low='red',midpoint=0.1,
+                                           breaks=c(0.05,0.1,0.15,0.2),labels=c('0.05','0.10','0.15','>0.20')
+                                           ,name='P-Value',guide=guide_colorbar(reverse=T))
+                    +theme(axis.text.x=element_text(angle=45,hjust=0.9,vjust=0.9))+
+                      geom_errorbar(mapping=aes(ymin=estimate-1.96*std.error,ymax=estimate+1.96*std.error))+
+                      xlab('Variable')+
+                      ylab(paste('Marginal Effect on ',names(fish_model$model)[1],sep='')) + 
+                      coord_flip())
+
+regression_plot
+
+```
+
+
+
+```{r, eval=T, echo=T}
+
+auged_reg <- augment(fish_model)
+
+
+obs_v_pred <- auged_reg %>%
+  ggplot(aes(fishiness, .fitted)) + 
+  geom_point(shape = 21, size = 4, alpha = 0.6, fill = 'steelblue4') + 
+  geom_abline(aes(slope=1, intercept = 0)) + 
+  xlab('ovbserved') + 
+  ylab('predicted') + 
+  geom_label(aes(0.25,0.7), label = paste('R2 = ', round(reg_summary$r.squared,2), sep = ''))
+
+obs_v_pred
+
+  qq_plot <- auged_reg %>% #create quantile-quantile plot
+    ggplot(aes(sample = .resid)) +
+    stat_qq(shape = 21, size = 4, alpha = 0.6, fill = 'steelblue4') +
+    xlab('Theoretical') +
+    ylab('Sample')
+
+  qq_plot
+
+```
+
+
+
+```{r, eval=F, echo=T}
+
+  hetsk_plot <- auged_reg %>% #plot fitted vs residuals
+    ggplot(aes(.fitted, .resid)) +
+    geom_point(shape = 21, size = 4, alpha = 0.6, fill = 'steelblue4') +
+  geom_hline(aes(yintercept = 0)) + 
+    xlab('Predicted') +
+    ylab('Residuals')
+
+hetsk_plot
+
+```
+
+
+
+```{r, eval=T, echo=T}
+
+
+  hetsk_plot2 <- auged_reg %>% 
+    ggplot(aes(.fitted, .resid, fill = spgroupname)) +
+    geom_point(shape = 21, size = 4, alpha = 0.6) +
+  geom_hline(aes(yintercept = 0)) + 
+    xlab('Predicted') +
+    ylab('Residuals')
+
+hetsk_plot2
+
+
+```
+
+
+
+```{r, eval=T, echo=T}
+
+  regional_bias <- auged_reg %>% #Check residuals by group
+  ggplot(aes(regionfao,.resid)) + 
+  geom_boxplot(fill = 'steelblue4') + 
+  geom_hline(aes(yintercept = 0)) + 
+  xlab('FAO Region') + 
+  ylab('Residuals')
+
+regional_bias
+
+  species_bias <- auged_reg %>%
+  ggplot(aes(spgroupname,.resid)) + 
+  geom_boxplot(fill = 'steelblue4') + 
+  geom_hline(aes(yintercept = 0)) + 
+  xlab('Species Category') + 
+  ylab('Residuals') + 
+    coord_flip()
+  
+  species_bias
+```
+
+
+
+```{r, eval=T, echo=T}
+
+foo <- function(x){ #random function
+  
+  y <- x^2
+  
+  return(y)
+}
+
+food <- lapply(1:100,foo) #this can be more efficient and simpler than loops
+
+```
+
+
+
+```{r, eval=T, echo=T}
+
+
+foody <- plyr::ldply(food)
+
+```
+
+T
+
+```{r, eval=T, echo=T}
+
+dplyr_fun <- function(region,dat)
+{
+  out <- dat %>%
+    filter(regionfao == region) %>%
+    summarise(mean_length = mean(length_catch))
+  
+  return(out)
+}
+
+basic_fun <- function(region,dat)
+{
+  out <- mean(as.numeric(dat[dat[,'regionfao'] == region,'length_catch']))
+  return(out)
+}
+
+regions <- rep(unique(as.character(regdat$regionfao)), 100) #thing to test
+
+startime <-  proc.time() #time the dplyr version
+a <- lapply(regions, dplyr_fun, dat = regdat)
+t1 <- proc.time() - startime
+
+startime <-  proc.time() #time the basic version
+b <- lapply(regions, basic_fun, dat = as.matrix(regdat))
+t2 <- proc.time() - startime
+
+t1[1]/t2[1]
+
+all(plyr::ldply(a)$V1 == plyr::ldply(b)$V1) #check and make sure they do the same thing
+
+```
+
+
+## Advanced Dplyr Applications
+### Underscore Functions  
+
+```{r,eval=F,echo=T}
+# function using standard dplyr functions
+fun1<-function(x,gpvar1,gpvar2,gpvar3){
+  y<-x %>%
+    group_by(gpvar1) %>%
+    mutate(globalcatch=sum(totalcatch,na.rm=T),globalrank=dense_rank(totalcatch)) %>% # global catch and cntry rank
+    group_by(gpvar2) %>% # now we group by a different level before our next calculation
+    mutate(percglobal=100*(totalcatch/globalcatch)) %>%
+    group_by(gpvar3) %>%
+    mutate(ingrouprank=dense_rank(totalcatch))
+  return(y)
+}
+
+fun1(spcatch, gpvar1 = year, gpvar2 = c(year,country), gpvar3 = country) # !!!!! THIS WILL NOT WORK !!!!!
+
+# function using underscores
+fun1<-function(x,gpvar1,gpvar2,gpvar3){
+  y<-x %>%
+    group_by_(gpvar1) %>%
+    mutate(globalcatch=sum(totalcatch,na.rm=T),globalrank=dense_rank(totalcatch)) %>% 
+    group_by_(gpvar2) %>% 
+    mutate(percglobal=100*(totalcatch/globalcatch)) %>%
+    group_by_(gpvar3) %>%
+    mutate(ingrouprank=dense_rank(desc(totalcatch)))
+  return(y)
+}  
+
+# apply function to species category and country datasets
+spcatch<-fun1(spcatch,gpvar1 = c('year'), gpvar2 = c('year','spgroupname'), gpvar3 = c('spgroupname')) 
+cntry<-fun1(cntry,gpvar1 = c('year'), gpvar2 = c('year','country'), gpvar3 = c('country'))   
+```  
+
+
+
